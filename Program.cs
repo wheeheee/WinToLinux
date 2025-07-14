@@ -8,57 +8,54 @@ using System.Windows.Forms;
 
 namespace MyTrayApp
 {
-    public class SysTrayApp : Form
+    public partial class SysTrayApp : Form
     {
         [STAThread]
         public static void Main()
         {
+            Application.EnableVisualStyles();
+            Application.SetHighDpiMode(HighDpiMode.SystemAware);
             Application.Run(new SysTrayApp());
         }
 
         private readonly NotifyIcon trayIcon;
-        private readonly ContextMenu trayMenu;
-        private readonly string appName = "WinToLinux";
+        private readonly ContextMenuStrip trayMenu;
+        private const string appName = "WinToLinux";
 
-        List<string> uefi = new List<string>();
-        List<string> uuid = new List<string>();
-        string bootsequence;
-        string currentValue;
-        int shift;
-        readonly Regex regexUUID = new Regex("^(\\{){0,1}[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{12}(\\}){0,1}$");
+        private readonly List<string> uefi = [];
+        private readonly List<string> uuid = [];
+        private readonly List<ToolStripMenuItem> bootOptions = [];
+        private string bootSequence;
+        private string currentValue;
+        private int shift;
+
+        private readonly ToolStripMenuItem startButton = new("Start with system");
+
+        [GeneratedRegex("^(\\{){0,1}[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{12}(\\}){0,1}$")]
+        private static partial Regex UUIDRegEx();
 
         public SysTrayApp()
         {
-            GetMenuItems();
-
-            currentValue = bootsequence ?? uuid.First();
-            shift = uuid.Count() - uefi.Count();
-
             // Create a simple tray menu with only one item.
-            trayMenu = new ContextMenu();
-            trayMenu.MenuItems.Add("Settings").Enabled = false;
-            trayMenu.MenuItems.Add("-");
-            trayMenu.MenuItems.Add("Start with system", OnRegisterInStartup).Checked = isTaskEnable();
-            trayMenu.MenuItems.Add("-");
-            trayMenu.MenuItems.Add("Reboot to...").Enabled = false;
-            trayMenu.MenuItems.Add("-");
+            trayMenu = new ContextMenuStrip();
+            trayMenu.Items.Add("Settings").Enabled = false;
+            trayMenu.Items.Add(new ToolStripSeparator());
 
-            foreach (var pos in uefi.Select((value, i) => new { i, value }))
-            {
-                MenuItem item = new MenuItem
-                {
-                    Checked = uuid[pos.i + shift] == currentValue,
-                    Tag = uuid[pos.i + shift],
-                    Text = pos.value
-                };
-                item.Click += OnMenuClick;
-                trayMenu.MenuItems.Add(item);
-            }
+            startButton.Checked = IsTaskEnabled();
+            startButton.Click += OnRegisterInStartup;
+            trayMenu.Items.Add(startButton);
 
-            trayMenu.MenuItems.Add("-");
-            trayMenu.MenuItems.Add("Reboot system", OnReboot);
-            trayMenu.MenuItems.Add("-");
-            trayMenu.MenuItems.Add("Exit", OnExit);
+            trayMenu.Items.Add(new ToolStripSeparator());
+            trayMenu.Items.Add("Reboot to...").Enabled = false;
+            trayMenu.Items.Add(new ToolStripSeparator());
+
+            RefreshMenuItems();
+            bootOptions.ForEach(item => trayMenu.Items.Add(item));
+
+            trayMenu.Items.Add(new ToolStripSeparator());
+            trayMenu.Items.Add("Reboot system", null, OnReboot);
+            trayMenu.Items.Add(new ToolStripSeparator());
+            trayMenu.Items.Add("Exit", null, OnExit);
 
             // Create a tray icon. In this example we use a
             // standard system icon for simplicity, but you
@@ -70,7 +67,7 @@ namespace MyTrayApp
                 Icon = WinToLinux.Properties.Resources.WtL,
 
                 // Add menu to tray icon and show it.
-                ContextMenu = trayMenu,
+                ContextMenuStrip = trayMenu,
                 Visible = true
             };
         }
@@ -83,30 +80,67 @@ namespace MyTrayApp
 
         private void OnMenuClick(object sender, EventArgs e)
         {
-            string UUID = (sender as MenuItem).Tag.ToString();
-            string command = "/C bcdedit.exe /set {fwbootmgr} bootsequence " + UUID + " /addfirst";
-            Console.WriteLine(command);
+            if (sender is not ToolStripMenuItem clickedItem || clickedItem.Tag is not string uuid)
+                return;
 
-            LaunchCMD(command);
+            // Set the boot sequence
+            string args = $"/Set {{fwbootmgr}} BootSequence {uuid} /AddFirst";
+            var psi = new ProcessStartInfo {
+                FileName = "bcdedit",
+                Arguments = args,
+                CreateNoWindow = true
+            };
+            Process.Start(psi);
+            Console.WriteLine("bcdedit" + args);
 
-            uuid = new List<string>();
-            uefi = new List<string>();
+            // Update the radio button selection
+            SetRadioButtonSelection(uuid);
 
-            LaunchCMD("/C bcdedit /enum firmware");
-
-            currentValue = bootsequence ?? uuid.First();
-            shift = uuid.Count() - uefi.Count();
-            foreach (var pos in uefi.Select((value, i) => new { i, value }))
+            // Update the current value
+            currentValue = uuid;
+        }
+        private void SetRadioButtonSelection(string selectedUUID)
+        {
+            // First, uncheck all boot option menu items
+            foreach (var item in bootOptions)
             {
-                trayMenu.MenuItems[pos.i + 6].Checked = uuid[pos.i + shift] == currentValue;
+                if (item.Tag is string itemUUID)
+                {
+                    item.Checked = (itemUUID == selectedUUID);
+                }
             }
         }
-
-        private void CreateTask()
+        private void RefreshMenuItems()
         {
-            using (TaskService ts = new TaskService())
+            uuid.Clear();
+            uefi.Clear();
+
+            GetMenuItems();
+
+            currentValue = bootSequence ?? uuid.FirstOrDefault(string.Empty);
+            shift = uuid.Count - uefi.Count;
+
+            foreach (var (value, i) in uefi.Select((value, i) => (value, i)))
             {
-                TaskDefinition td = ts.NewTask();
+                var item = new ToolStripMenuItem
+                {
+                    CheckOnClick = true,
+                    Tag = i + shift < uuid.Count ? uuid[i + shift] : string.Empty,
+                    Text = value
+                };
+                item.Click += OnMenuClick;
+                bootOptions.Add(item);
+            }
+
+            // Update radio button selection
+            SetRadioButtonSelection(currentValue);
+        }
+        private static void CreateTask()
+        {
+            try
+            {
+                using var ts = new TaskService();
+                var td = ts.NewTask();
 
                 td.RegistrationInfo.Description = "WinToLinux. Start on boot";
                 td.Triggers.Add(new LogonTrigger());
@@ -120,97 +154,94 @@ namespace MyTrayApp
 
                 ts.RootFolder.RegisterTaskDefinition(appName, td);
             }
-        }
-
-        private void DeleteTask()
-        {
-            using (TaskService ts = new TaskService())
+            catch (Exception ex)
             {
-                if (ts.GetTask(appName) != null)
-                {
-                    ts.RootFolder.DeleteTask(appName);
-                }
+                MessageBox.Show($"Error creating startup task: {ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private bool isTaskEnable()
+        private static void DeleteTask()
         {
-            using (TaskService ts = new TaskService())
+            using var ts = new TaskService();
+            if (ts.GetTask(appName) != null)
             {
-                return (ts.GetTask(appName) != null);
+                ts.RootFolder.DeleteTask(appName);
             }
         }
 
-        private void OnRegisterInStartup(object sender, EventArgs e)
+        private static bool IsTaskEnabled()
         {
-            if (isTaskEnable())
+            using var ts = new TaskService();
+            return ts.GetTask(appName) != null;
+        }
+
+        private void OnRegisterInStartup(object _, EventArgs e)
+        {
+            if (IsTaskEnabled())
             {
                 DeleteTask();
-                trayMenu.MenuItems[2].Checked = false;
+                startButton.Checked = false;
             }
             else
             {
                 CreateTask();
-                trayMenu.MenuItems[2].Checked = true;
+                startButton.Checked = true;
             }
         }
 
         private void OnReboot(object sender, EventArgs e)
         {
-            LaunchCMD("/C shutdown /r /t 0");
+            var psi = new ProcessStartInfo("shutdown", "/r /t 0");
+            psi.CreateNoWindow = true;
+            Process.Start(psi);
         }
 
         private void GetMenuItems()
         {
-            LaunchCMD("/C bcdedit /enum firmware");
+            var psi = new ProcessStartInfo {
+                FileName = "bcdedit",
+                Arguments = "/enum firmware",
+                RedirectStandardOutput = true,
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+            using var process = new Process { StartInfo = psi };
+            process.OutputDataReceived += ParseBCDEditOutput;
+            process.Start();
+            process.BeginOutputReadLine();
+            process.WaitForExit();
         }
 
-        private void LaunchCMD(string command)
+        void ParseBCDEditOutput(object sender, DataReceivedEventArgs e)
         {
-            Process build = new Process();
-            build.StartInfo.Arguments = command;
-            build.StartInfo.FileName = "cmd.exe";
+            if (string.IsNullOrEmpty(e.Data))
+                return;
 
-            build.StartInfo.UseShellExecute = false;
-            build.StartInfo.RedirectStandardOutput = true;
-            build.StartInfo.RedirectStandardError = true;
-            build.StartInfo.CreateNoWindow = true;
-            build.ErrorDataReceived += Build_ErrorAndDataReceived;
-            build.OutputDataReceived += Build_ErrorAndDataReceived;
-            build.EnableRaisingEvents = true;
-            build.Start();
-            build.BeginOutputReadLine();
-            build.BeginErrorReadLine();
-            build.WaitForExit();
-        }
+            string strMessage = e.Data;
+            string[] splitMsg = strMessage.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-        void Build_ErrorAndDataReceived(object sender, DataReceivedEventArgs e)
-        {
-            if (e.Data != null && e.Data != "")
+            if (splitMsg.Length == 0)
+                return;
+
+            var match = UUIDRegEx().Match(splitMsg.Last());
+
+            if (splitMsg[0] == "description")
             {
-                string strMessage = e.Data;
-                string[] splited = strMessage.Split(' ');
-                splited = splited.Where(address => !string.IsNullOrWhiteSpace(address)).ToArray();
-                Match match = regexUUID.Match(splited.Last());
-
-                if (splited[0] == "description")
-                {
-                    splited = splited.Where(w => w != splited[0]).ToArray();
-                    Console.WriteLine(String.Join(" ", splited));
-                    uefi.Add(String.Join(" ", splited));
-                }
-
-                if (splited[0] == "bootsequence")
-                {
-                    Console.Write(splited.Last());
-                    bootsequence = splited.Last();
-                }
-
-                if (splited[0] != "resumeobject" && splited[0] != "bootsequence" && match.Success || splited.Last() == "{bootmgr}")
-                {
-                    Console.Write(splited.Last());
-                    uuid.Add(splited.Last());
-                }
+                var description = string.Join(" ", splitMsg.Skip(1));
+                Console.WriteLine(description);
+                uefi.Add(description);
+            }
+            else if (splitMsg[0] == "bootsequence")
+            {
+                Console.Write(splitMsg.Last());
+                bootSequence = splitMsg.Last();
+            }
+            else if (splitMsg[0] != "resumeobject" && splitMsg[0] != "bootsequence" &&
+                (match.Success || splitMsg.Last() == "{bootmgr}"))
+            {
+                Console.Write(splitMsg.Last());
+                uuid.Add(splitMsg.Last());
             }
         }
 
@@ -230,6 +261,7 @@ namespace MyTrayApp
             {
                 // Release the icon resource.
                 trayIcon.Dispose();
+                trayMenu?.Dispose();
             }
 
             base.Dispose(isDisposing);
