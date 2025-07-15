@@ -45,9 +45,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ./artifacts/WinToLinux-x64
-            ./artifacts/WinToLinux-x86
-            ./artifacts/WinToLinux-arm64
+            ./artifacts/WinToLinux-x64.exe
+            ./artifacts/WinToLinux-x86.exe
+            ./artifacts/WinToLinux-arm64.exe
             WinToLinux_x64.zip
             WinToLinux_x86.zip
             WinToLinux_arm64.zip
