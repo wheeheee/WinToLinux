@@ -33,10 +33,21 @@ jobs:
           Compress-Archive -Path ./bin/Release/*/win-x86/publish -DestinationPath WinToLinux_x86.zip
           Compress-Archive -Path ./bin/Release/*/win-arm64/publish -DestinationPath WinToLinux_arm64.zip
 
+      - name: Rename .exe output
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts
+          Move-Item -Path ./bin/Release/*/win-x64/publish/WinToLinux.exe -Destination ./artifacts/WinToLinux-x64.exe
+          Move-Item -Path ./bin/Release/*/win-x86/publish/WinToLinux.exe -Destination ./artifacts/WinToLinux-x86.exe
+          Move-Item -Path ./bin/Release/*/win-arm64/publish/WinToLinux.exe -Destination ./artifacts/WinToLinux-arm64.exe
+        shell: pwsh
+
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            ./artifacts/WinToLinux-x64
+            ./artifacts/WinToLinux-x86
+            ./artifacts/WinToLinux-arm64
             WinToLinux_x64.zip
             WinToLinux_x86.zip
             WinToLinux_arm64.zip
